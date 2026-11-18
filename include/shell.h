@@ -20,8 +20,10 @@
 #define ARGLEN 64
 #define MAX_CMDS 16
 #define MAX_JOBS 64
+#define MAX_BLOCK_LINES 64
 #define HISTORY_SIZE 20
 #define PROMPT "FCIT> "
+#define CONT_PROMPT "> "
 
 typedef struct {
     char** argv;       // NULL-terminated argument vector
@@ -46,7 +48,12 @@ void free_commands(Command* cmds, int num_cmds);
 // Execution and built-in prototypes
 int execute(char** arglist);
 int execute_pipeline(Command* cmds, int num_cmds, int background, const char* raw_cmd);
-int handle_builtin(char** arglist);
+int handle_builtin(char** arglist, int* exit_status);
+int process_command_line(char* cmdline);
+
+// Control-flow (if-then-else-fi) prototypes
+int starts_with_if(const char* line);
+int handle_if_statement(const char* first_line);
 
 // Job control prototypes
 void add_job(pid_t pid, const char* cmd);

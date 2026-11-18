@@ -53,13 +53,16 @@ int execute(char* arglist[]) {
             exit(1);
         default: // Parent process
             waitpid(cpid, &status, 0);
-            return 0;
+            if (WIFEXITED(status)) {
+                return WEXITSTATUS(status);
+            }
+            return 1;
     }
 }
 
 int execute_pipeline(Command* cmds, int num_cmds, int background, const char* raw_cmd) {
     if (cmds == NULL || num_cmds <= 0) {
-        return -1;
+        return 1;
     }
 
     // Run single unredirected, non-background built-in directly in the parent shell
@@ -68,8 +71,9 @@ int execute_pipeline(Command* cmds, int num_cmds, int background, const char* ra
         cmds[0].input_file == NULL &&
         cmds[0].output_file == NULL &&
         is_builtin_cmd(cmds[0].argv[0])) {
-        handle_builtin(cmds[0].argv);
-    return 0;
+        int builtin_status = 0;
+    handle_builtin(cmds[0].argv, &builtin_status);
+    return builtin_status;
         }
 
         int prev_read_fd = -1;
@@ -81,7 +85,7 @@ int execute_pipeline(Command* cmds, int num_cmds, int background, const char* ra
                 if (pipe(pipefd) < 0) {
                     perror("pipe");
                     if (prev_read_fd != -1) close(prev_read_fd);
-                    return -1;
+                    return 1;
                 }
             }
 
@@ -93,7 +97,7 @@ int execute_pipeline(Command* cmds, int num_cmds, int background, const char* ra
                     close(pipefd[0]);
                     close(pipefd[1]);
                 }
-                return -1;
+                return 1;
             }
 
             if (pid == 0) {
@@ -120,8 +124,9 @@ int execute_pipeline(Command* cmds, int num_cmds, int background, const char* ra
                 apply_redirections(&cmds[i]);
 
                 if (is_builtin_cmd(cmds[i].argv[0])) {
-                    handle_builtin(cmds[i].argv);
-                    exit(0);
+                    int builtin_status = 0;
+                    handle_builtin(cmds[i].argv, &builtin_status);
+                    exit(builtin_status);
                 }
 
                 execvp(cmds[i].argv[0], cmds[i].argv);
@@ -142,15 +147,22 @@ int execute_pipeline(Command* cmds, int num_cmds, int background, const char* ra
         }
 
         if (background) {
-            // Do not block: store the pipeline's last process PID in the background jobs list
             add_job(pids[num_cmds - 1], raw_cmd);
-        } else {
-            // Foreground: wait for every child in the pipeline to finish
-            int status;
-            for (int i = 0; i < num_cmds; i++) {
-                waitpid(pids[i], &status, 0);
+            return 0;
+        }
+
+        // Foreground: wait for all stages and capture the final stage's exit code
+        int status = 0;
+        int last_exit_code = 0;
+        for (int i = 0; i < num_cmds; i++) {
+            if (waitpid(pids[i], &status, 0) > 0 && i == num_cmds - 1) {
+                if (WIFEXITED(status)) {
+                    last_exit_code = WEXITSTATUS(status);
+                } else {
+                    last_exit_code = 1;
+                }
             }
         }
 
-        return 0;
+        return last_exit_code;
 }

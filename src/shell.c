@@ -12,6 +12,10 @@ static const char* builtin_cmds[] = {
     "help",
     "history",
     "jobs",
+    "if",
+    "then",
+    "else",
+    "fi",
     NULL
 };
 
@@ -43,7 +47,7 @@ static char* command_generator(const char* text, int state) {
         }
     }
 
-    // 1. Match built-in commands first
+    // 1. Match built-in commands and keywords first
     while (builtin_cmds[builtin_idx] != NULL) {
         const char* name = builtin_cmds[builtin_idx++];
         if (strncmp(name, text, len) == 0) {
@@ -389,9 +393,13 @@ void free_commands(Command* cmds, int num_cmds) {
     }
 }
 
-int handle_builtin(char** arglist) {
+int handle_builtin(char** arglist, int* exit_status) {
     if (arglist == NULL || arglist[0] == NULL) {
         return 0;
+    }
+
+    if (exit_status != NULL) {
+        *exit_status = 0;
     }
 
     if (strcmp(arglist[0], "exit") == 0) {
@@ -407,23 +415,26 @@ int handle_builtin(char** arglist) {
             target_dir = getenv("HOME");
             if (target_dir == NULL) {
                 fprintf(stderr, "cd: HOME not set\n");
+                if (exit_status != NULL) *exit_status = 1;
                 return 1;
             }
         }
         if (chdir(target_dir) != 0) {
             perror("cd");
+            if (exit_status != NULL) *exit_status = 1;
         }
         return 1;
     }
 
     if (strcmp(arglist[0], "help") == 0) {
-        printf("Built-in commands:\n");
-        printf("  cd <directory>  Change the current working directory\n");
-        printf("  history         Display the command history list\n");
-        printf("  !n              Re-execute the n-th command from history\n");
-        printf("  jobs            List active background jobs\n");
-        printf("  help            Display this help message\n");
-        printf("  exit            Exit the shell\n");
+        printf("Built-in commands and control structures:\n");
+        printf("  cd <directory>          Change the current working directory\n");
+        printf("  history                 Display the command history list\n");
+        printf("  !n                      Re-execute the n-th command from history\n");
+        printf("  jobs                    List active background jobs\n");
+        printf("  if ... then ... fi      Conditional multi-line command execution\n");
+        printf("  help                    Display this help message\n");
+        printf("  exit                    Exit the shell\n");
         return 1;
     }
 
