@@ -13,7 +13,7 @@ static int is_blank(const char* str) {
 
 int main() {
     char* cmdline;
-    char** arglist;
+    char** tokens;
 
     init_readline();
 
@@ -24,7 +24,6 @@ int main() {
             errno = 0;
             long n = strtol(cmdline + 1, &endptr, 10);
 
-            // Skip optional trailing spaces after the number
             while (endptr != NULL && (*endptr == ' ' || *endptr == '\t')) {
                 endptr++;
             }
@@ -53,22 +52,21 @@ int main() {
                 cmdline = expanded;
         }
 
-        // Record non-empty command in both Readline history (Up/Down arrows) and shell history
         if (!is_blank(cmdline)) {
             add_history(cmdline);
             add_to_history(cmdline);
         }
 
-        if ((arglist = tokenize(cmdline)) != NULL) {
-            if (!handle_builtin(arglist)) {
-                execute(arglist);
+        if ((tokens = tokenize(cmdline)) != NULL) {
+            Command cmds[MAX_CMDS];
+            int num_cmds = 0;
+
+            if (parse_pipeline(tokens, cmds, &num_cmds) == 0) {
+                execute_pipeline(cmds, num_cmds);
             }
 
-            // Free the memory allocated by tokenize()
-            for (int i = 0; arglist[i] != NULL; i++) {
-                free(arglist[i]);
-            }
-            free(arglist);
+            free_commands(cmds, num_cmds);
+            free_tokens(tokens);
         }
         free(cmdline);
     }

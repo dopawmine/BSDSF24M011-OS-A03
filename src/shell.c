@@ -81,7 +81,6 @@ static char* command_generator(const char* text, int state) {
 static char** shell_completion(const char* text, int start, int end) {
     (void)end;
 
-    // Check if only whitespace precedes `start` (meaning we are completing the command name)
     int is_command_pos = 1;
     for (int i = 0; i < start; i++) {
         if (rl_line_buffer[i] != ' ' && rl_line_buffer[i] != '\t') {
@@ -91,11 +90,9 @@ static char** shell_completion(const char* text, int start, int end) {
     }
 
     if (is_command_pos) {
-        // Also allow default filename completion if no command matches (e.g., ./script)
         return rl_completion_matches(text, command_generator);
     }
 
-    // Returning NULL lets Readline perform default filename completion
     return NULL;
 }
 
@@ -109,7 +106,6 @@ void add_to_history(const char* cmd) {
         return;
     }
 
-    // Ignore empty or whitespace-only commands
     const char* p = cmd;
     while (*p == ' ' || *p == '\t' || *p == '\n') {
         p++;
@@ -127,7 +123,6 @@ void add_to_history(const char* cmd) {
     if (history_count < HISTORY_SIZE) {
         history[history_count++] = copy;
     } else {
-        // History is full: free the oldest command and shift remaining entries left
         free(history[0]);
         for (int i = 1; i < HISTORY_SIZE; i++) {
             history[i - 1] = history[i];
@@ -158,53 +153,166 @@ void free_history(void) {
     clear_history();
 }
 
+void free_tokens(char** tokens) {
+    if (tokens == NULL) return;
+    for (int i = 0; tokens[i] != NULL; i++) {
+        free(tokens[i]);
+    }
+    free(tokens);
+}
+
 char** tokenize(char* cmdline) {
-    // Edge case: empty command line
     if (cmdline == NULL || cmdline[0] == '\0' || cmdline[0] == '\n') {
         return NULL;
     }
 
     char** arglist = (char**)malloc(sizeof(char*) * (MAXARGS + 1));
-    for (int i = 0; i < MAXARGS + 1; i++) {
-        arglist[i] = (char*)malloc(sizeof(char) * ARGLEN);
-        bzero(arglist[i], ARGLEN);
+    if (arglist == NULL) {
+        perror("malloc");
+        return NULL;
     }
 
     char* cp = cmdline;
-    char* start;
-    int len;
     int argnum = 0;
 
     while (*cp != '\0' && argnum < MAXARGS) {
-        while (*cp == ' ' || *cp == '\t') cp++; // Skip leading whitespace
+        while (*cp == ' ' || *cp == '\t') cp++;
+        if (*cp == '\0') break;
 
-        if (*cp == '\0') break; // Line was only whitespace
+        // Treat <, >, and | as distinct operator tokens
+        if (*cp == '<' || *cp == '>' || *cp == '|') {
+            char* op = (char*)malloc(2);
+            op[0] = *cp;
+            op[1] = '\0';
+            arglist[argnum++] = op;
+            cp++;
+            continue;
+        }
 
-        start = cp;
-        len = 1;
-        while (*++cp != '\0' && !(*cp == ' ' || *cp == '\t')) {
-            len++;
+        // Read regular word (respecting single/double quotes)
+        char buf[ARGLEN];
+        int len = 0;
+        char quote = '\0';
+
+        while (*cp != '\0') {
+            if (quote == '\0') {
+                if (*cp == ' ' || *cp == '\t' || *cp == '<' || *cp == '>' || *cp == '|') {
+                    break;
+                }
+                if (*cp == '"' || *cp == '\'') {
+                    quote = *cp++;
+                    continue;
+                }
+            } else {
+                if (*cp == quote) {
+                    quote = '\0';
+                    cp++;
+                    continue;
+                }
+            }
+
+            if (len < ARGLEN - 1) {
+                buf[len++] = *cp;
+            }
+            cp++;
         }
-        if (len >= ARGLEN) {
-            len = ARGLEN - 1;
-        }
-        strncpy(arglist[argnum], start, len);
-        arglist[argnum][len] = '\0';
-        argnum++;
+
+        buf[len] = '\0';
+        arglist[argnum++] = strdup(buf);
     }
 
-    if (argnum == 0) { // No arguments were parsed
-        for (int i = 0; i < MAXARGS + 1; i++) free(arglist[i]);
+    if (argnum == 0) {
         free(arglist);
         return NULL;
     }
 
-    // Free unused pre-allocated argument slots before NULL-terminating
-    for (int i = argnum; i < MAXARGS + 1; i++) {
-        free(arglist[i]);
-    }
     arglist[argnum] = NULL;
     return arglist;
+}
+
+int parse_pipeline(char** tokens, Command* cmds, int* num_cmds) {
+    if (tokens == NULL || tokens[0] == NULL) {
+        *num_cmds = 0;
+        return -1;
+    }
+
+    int cmd_idx = 0;
+    int argc = 0;
+
+    cmds[0].argv = (char**)calloc(MAXARGS + 1, sizeof(char*));
+    cmds[0].input_file = NULL;
+    cmds[0].output_file = NULL;
+
+    for (int i = 0; tokens[i] != NULL; i++) {
+        if (strcmp(tokens[i], "|") == 0) {
+            if (argc == 0 || tokens[i + 1] == NULL || strcmp(tokens[i + 1], "|") == 0) {
+                fprintf(stderr, "Syntax error near unexpected token `|'\n");
+                cmds[cmd_idx].argv[argc] = NULL;
+                *num_cmds = cmd_idx + 1;
+                return -1;
+            }
+            cmds[cmd_idx].argv[argc] = NULL;
+            cmd_idx++;
+            if (cmd_idx >= MAX_CMDS) {
+                fprintf(stderr, "Error: too many piped commands\n");
+                *num_cmds = cmd_idx;
+                return -1;
+            }
+            argc = 0;
+            cmds[cmd_idx].argv = (char**)calloc(MAXARGS + 1, sizeof(char*));
+            cmds[cmd_idx].input_file = NULL;
+            cmds[cmd_idx].output_file = NULL;
+        } else if (strcmp(tokens[i], "<") == 0) {
+            if (tokens[i + 1] == NULL || strcmp(tokens[i + 1], "<") == 0 ||
+                strcmp(tokens[i + 1], ">") == 0 || strcmp(tokens[i + 1], "|") == 0) {
+                fprintf(stderr, "Syntax error: expected filename after `<'\n");
+            cmds[cmd_idx].argv[argc] = NULL;
+            *num_cmds = cmd_idx + 1;
+            return -1;
+                }
+                free(cmds[cmd_idx].input_file);
+                cmds[cmd_idx].input_file = strdup(tokens[++i]);
+        } else if (strcmp(tokens[i], ">") == 0) {
+            if (tokens[i + 1] == NULL || strcmp(tokens[i + 1], "<") == 0 ||
+                strcmp(tokens[i + 1], ">") == 0 || strcmp(tokens[i + 1], "|") == 0) {
+                fprintf(stderr, "Syntax error: expected filename after `>'\n");
+            cmds[cmd_idx].argv[argc] = NULL;
+            *num_cmds = cmd_idx + 1;
+            return -1;
+                }
+                free(cmds[cmd_idx].output_file);
+                cmds[cmd_idx].output_file = strdup(tokens[++i]);
+        } else {
+            cmds[cmd_idx].argv[argc++] = strdup(tokens[i]);
+        }
+    }
+
+    if (argc == 0) {
+        fprintf(stderr, "Syntax error: missing command\n");
+        cmds[cmd_idx].argv[argc] = NULL;
+        *num_cmds = cmd_idx + 1;
+        return -1;
+    }
+
+    cmds[cmd_idx].argv[argc] = NULL;
+    *num_cmds = cmd_idx + 1;
+    return 0;
+}
+
+void free_commands(Command* cmds, int num_cmds) {
+    for (int i = 0; i < num_cmds; i++) {
+        if (cmds[i].argv != NULL) {
+            for (int j = 0; cmds[i].argv[j] != NULL; j++) {
+                free(cmds[i].argv[j]);
+            }
+            free(cmds[i].argv);
+            cmds[i].argv = NULL;
+        }
+        free(cmds[i].input_file);
+        cmds[i].input_file = NULL;
+        free(cmds[i].output_file);
+        cmds[i].output_file = NULL;
+    }
 }
 
 int handle_builtin(char** arglist) {
