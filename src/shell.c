@@ -14,7 +14,7 @@ char* read_cmd(char* prompt, FILE* fp) {
         free(cmdline);
         return NULL; // Handle Ctrl+D
     }
-    
+
     cmdline[pos] = '\0';
     return cmdline;
 }
@@ -38,7 +38,7 @@ char** tokenize(char* cmdline) {
 
     while (*cp != '\0' && argnum < MAXARGS) {
         while (*cp == ' ' || *cp == '\t') cp++; // Skip leading whitespace
-        
+
         if (*cp == '\0') break; // Line was only whitespace
 
         start = cp;
@@ -52,11 +52,57 @@ char** tokenize(char* cmdline) {
     }
 
     if (argnum == 0) { // No arguments were parsed
-        for(int i = 0; i < MAXARGS + 1; i++) free(arglist[i]);
+        for (int i = 0; i < MAXARGS + 1; i++) free(arglist[i]);
         free(arglist);
         return NULL;
     }
 
+    // Free unused pre-allocated argument slots before NULL-terminating
+    for (int i = argnum; i < MAXARGS + 1; i++) {
+        free(arglist[i]);
+    }
     arglist[argnum] = NULL;
     return arglist;
+}
+
+int handle_builtin(char** arglist) {
+    if (arglist == NULL || arglist[0] == NULL) {
+        return 0;
+    }
+
+    if (strcmp(arglist[0], "exit") == 0) {
+        printf("Shell exited.\n");
+        exit(0);
+    }
+
+    if (strcmp(arglist[0], "cd") == 0) {
+        const char* target_dir = arglist[1];
+        if (target_dir == NULL) {
+            target_dir = getenv("HOME");
+            if (target_dir == NULL) {
+                fprintf(stderr, "cd: HOME not set\n");
+                return 1;
+            }
+        }
+        if (chdir(target_dir) != 0) {
+            perror("cd");
+        }
+        return 1;
+    }
+
+    if (strcmp(arglist[0], "help") == 0) {
+        printf("Built-in commands:\n");
+        printf("  cd <directory>  Change the current working directory\n");
+        printf("  help            Display this help message\n");
+        printf("  jobs            List active background jobs\n");
+        printf("  exit            Exit the shell\n");
+        return 1;
+    }
+
+    if (strcmp(arglist[0], "jobs") == 0) {
+        printf("Job control not yet implemented.\n");
+        return 1;
+    }
+
+    return 0; // Not a built-in command
 }
