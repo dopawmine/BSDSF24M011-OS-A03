@@ -6,7 +6,9 @@ static int is_builtin_cmd(const char* cmd) {
     strcmp(cmd, "cd") == 0 ||
     strcmp(cmd, "help") == 0 ||
     strcmp(cmd, "jobs") == 0 ||
-    strcmp(cmd, "history") == 0);
+    strcmp(cmd, "history") == 0 ||
+    strcmp(cmd, "set") == 0 ||
+    is_var_assignment(cmd));
 }
 
 static void apply_redirections(const Command* cmd) {

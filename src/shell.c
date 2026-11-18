@@ -6,12 +6,15 @@ static int history_count = 0;
 static Job job_list[MAX_JOBS];
 static int next_job_id = 1;
 
+static ShellVar* var_head = NULL;
+
 static const char* builtin_cmds[] = {
     "cd",
     "exit",
     "help",
     "history",
     "jobs",
+    "set",
     "if",
     "then",
     "else",
@@ -106,6 +109,178 @@ static char** shell_completion(const char* text, int start, int end) {
 void init_readline(void) {
     rl_attempted_completion_function = shell_completion;
     using_history();
+}
+
+int is_valid_var_name(const char* name) {
+    if (name == NULL || name[0] == '\0') {
+        return 0;
+    }
+    if (!isalpha((unsigned char)name[0]) && name[0] != '_') {
+        return 0;
+    }
+    for (int i = 1; name[i] != '\0'; i++) {
+        if (!isalnum((unsigned char)name[i]) && name[i] != '_') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int is_var_assignment(const char* token) {
+    if (token == NULL) {
+        return 0;
+    }
+    const char* eq = strchr(token, '=');
+    if (eq == NULL || eq == token) {
+        return 0;
+    }
+
+    size_t name_len = (size_t)(eq - token);
+    char* name = (char*)malloc(name_len + 1);
+    if (name == NULL) {
+        return 0;
+    }
+    memcpy(name, token, name_len);
+    name[name_len] = '\0';
+
+    int valid = is_valid_var_name(name);
+    free(name);
+    return valid;
+}
+
+void set_shell_var(const char* name, const char* value) {
+    if (!is_valid_var_name(name)) {
+        return;
+    }
+
+    const char* val_str = (value != NULL) ? value : "";
+
+    // Update existing variable if already defined
+    ShellVar* curr = var_head;
+    while (curr != NULL) {
+        if (strcmp(curr->name, name) == 0) {
+            char* new_val = strdup(val_str);
+            if (new_val == NULL) {
+                perror("strdup");
+                return;
+            }
+            free(curr->value);
+            curr->value = new_val;
+            return;
+        }
+        curr = curr->next;
+    }
+
+    // Insert new variable node at the head of the linked list
+    ShellVar* node = (ShellVar*)malloc(sizeof(ShellVar));
+    if (node == NULL) {
+        perror("malloc");
+        return;
+    }
+    node->name = strdup(name);
+    node->value = strdup(val_str);
+    if (node->name == NULL || node->value == NULL) {
+        perror("strdup");
+        free(node->name);
+        free(node->value);
+        free(node);
+        return;
+    }
+    node->next = var_head;
+    var_head = node;
+}
+
+const char* get_shell_var(const char* name) {
+    if (name == NULL || name[0] == '\0') {
+        return NULL;
+    }
+
+    ShellVar* curr = var_head;
+    while (curr != NULL) {
+        if (strcmp(curr->name, name) == 0) {
+            return curr->value;
+        }
+        curr = curr->next;
+    }
+
+    // Fallback to process environment variables (e.g., $HOME, $PATH)
+    return getenv(name);
+}
+
+int handle_var_assignment(const char* assignment) {
+    const char* eq = strchr(assignment, '=');
+    if (eq == NULL) {
+        return 1;
+    }
+
+    size_t name_len = (size_t)(eq - assignment);
+    char* name = (char*)malloc(name_len + 1);
+    if (name == NULL) {
+        perror("malloc");
+        return 1;
+    }
+    memcpy(name, assignment, name_len);
+    name[name_len] = '\0';
+
+    const char* raw_val = eq + 1;
+    // Allow right-hand side to reference another variable (e.g., COPY=$MSG)
+    if (raw_val[0] == '$' && raw_val[1] != '\0') {
+        const char* expanded = get_shell_var(raw_val + 1);
+        set_shell_var(name, expanded != NULL ? expanded : "");
+    } else {
+        set_shell_var(name, raw_val);
+    }
+
+    free(name);
+    return 0;
+}
+
+void print_shell_vars(void) {
+    if (var_head == NULL) {
+        printf("No shell variables defined.\n");
+        return;
+    }
+
+    ShellVar* curr = var_head;
+    while (curr != NULL) {
+        printf("%s=%s\n", curr->name, curr->value);
+        curr = curr->next;
+    }
+}
+
+void free_shell_vars(void) {
+    ShellVar* curr = var_head;
+    while (curr != NULL) {
+        ShellVar* next = curr->next;
+        free(curr->name);
+        free(curr->value);
+        free(curr);
+        curr = next;
+    }
+    var_head = NULL;
+}
+
+void expand_variables(char** tokens) {
+    if (tokens == NULL) {
+        return;
+    }
+
+    for (int i = 0; tokens[i] != NULL; i++) {
+        // Skip variable expansion on the LHS of a standalone assignment
+        if (i == 0 && is_var_assignment(tokens[i])) {
+            continue;
+        }
+
+        if (tokens[i][0] == '$' && tokens[i][1] != '\0') {
+            const char* var_name = tokens[i] + 1;
+            const char* val = get_shell_var(var_name);
+            char* replacement = strdup(val != NULL ? val : "");
+            if (replacement != NULL) {
+                free(tokens[i]);
+                tokens[i] = replacement;
+            }
+        }
+    }
 }
 
 void add_job(pid_t pid, const char* cmd) {
@@ -402,7 +577,15 @@ int handle_builtin(char** arglist, int* exit_status) {
         *exit_status = 0;
     }
 
+    // Handle VARNAME=value assignment as a built-in action
+    if (is_var_assignment(arglist[0]) && arglist[1] == NULL) {
+        int status = handle_var_assignment(arglist[0]);
+        if (exit_status != NULL) *exit_status = status;
+        return 1;
+    }
+
     if (strcmp(arglist[0], "exit") == 0) {
+        free_shell_vars();
         free_jobs();
         free_history();
         printf("Shell exited.\n");
@@ -445,6 +628,11 @@ int handle_builtin(char** arglist, int* exit_status) {
 
     if (strcmp(arglist[0], "history") == 0) {
         print_history();
+        return 1;
+    }
+
+    if (strcmp(arglist[0], "set") == 0) {
+        print_shell_vars();
         return 1;
     }
 

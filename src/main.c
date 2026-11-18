@@ -51,13 +51,12 @@ static int execute_block_lines(char** lines, int count) {
 
     while (i < count) {
         if (starts_with_if(lines[i])) {
-            // Collect nested if ... fi lines from the buffered block
             char* nested_cond = strdup(lines[i] + 2);
             char* nested_then[MAX_BLOCK_LINES];
             char* nested_else[MAX_BLOCK_LINES];
             int n_then = 0, n_else = 0;
             int depth = 1;
-            int state = 0; // 0: before then, 1: in then, 2: in else
+            int state = 0;
 
             i++;
             while (i < count && depth > 0) {
@@ -120,7 +119,6 @@ int handle_if_statement(const char* first_line) {
     int then_count = 0;
     int else_count = 0;
 
-    // state: 0 = waiting for 'then', 1 = reading 'then' block, 2 = reading 'else' block
     int state = 0;
     int depth = 1;
     int syntax_error = 0;
@@ -268,6 +266,9 @@ int process_command_line(char* cmdline) {
             if (*segment != '\0') {
                 char** tokens = tokenize(segment);
                 if (tokens != NULL) {
+                    // Expand $VARNAME tokens before parsing/executing
+                    expand_variables(tokens);
+
                     Command cmds[MAX_CMDS];
                     int num_cmds = 0;
 
@@ -356,6 +357,7 @@ int main() {
         free(cmdline);
     }
 
+    free_shell_vars();
     free_jobs();
     free_history();
     printf("\nShell exited.\n");

@@ -17,7 +17,7 @@
 
 #define MAX_LEN 512
 #define MAXARGS 32
-#define ARGLEN 64
+#define ARGLEN 256
 #define MAX_CMDS 16
 #define MAX_JOBS 64
 #define MAX_BLOCK_LINES 64
@@ -38,12 +38,28 @@ typedef struct {
     int active;
 } Job;
 
+typedef struct ShellVar {
+    char* name;
+    char* value;
+    struct ShellVar* next;
+} ShellVar;
+
 // Initialization and parsing prototypes
 void init_readline(void);
 char** tokenize(char* cmdline);
 void free_tokens(char** tokens);
 int parse_pipeline(char** tokens, Command* cmds, int* num_cmds);
 void free_commands(Command* cmds, int num_cmds);
+
+// Shell variable prototypes
+int is_valid_var_name(const char* name);
+int is_var_assignment(const char* token);
+int handle_var_assignment(const char* assignment);
+void set_shell_var(const char* name, const char* value);
+const char* get_shell_var(const char* name);
+void print_shell_vars(void);
+void free_shell_vars(void);
+void expand_variables(char** tokens);
 
 // Execution and built-in prototypes
 int execute(char** arglist);
