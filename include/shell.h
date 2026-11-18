@@ -19,6 +19,7 @@
 #define MAXARGS 32
 #define ARGLEN 64
 #define MAX_CMDS 16
+#define MAX_JOBS 64
 #define HISTORY_SIZE 20
 #define PROMPT "FCIT> "
 
@@ -27,6 +28,13 @@ typedef struct {
     char* input_file;  // Target file for '<' redirection (or NULL)
     char* output_file; // Target file for '>' redirection (or NULL)
 } Command;
+
+typedef struct {
+    int job_id;
+    pid_t pid;
+    char* cmd;
+    int active;
+} Job;
 
 // Initialization and parsing prototypes
 void init_readline(void);
@@ -37,8 +45,14 @@ void free_commands(Command* cmds, int num_cmds);
 
 // Execution and built-in prototypes
 int execute(char** arglist);
-int execute_pipeline(Command* cmds, int num_cmds);
+int execute_pipeline(Command* cmds, int num_cmds, int background, const char* raw_cmd);
 int handle_builtin(char** arglist);
+
+// Job control prototypes
+void add_job(pid_t pid, const char* cmd);
+void reap_background_jobs(void);
+void print_jobs(void);
+void free_jobs(void);
 
 // History management prototypes
 void add_to_history(const char* cmd);

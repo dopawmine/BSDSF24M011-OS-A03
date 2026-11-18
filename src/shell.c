@@ -3,6 +3,9 @@
 static char* history[HISTORY_SIZE];
 static int history_count = 0;
 
+static Job job_list[MAX_JOBS];
+static int next_job_id = 1;
+
 static const char* builtin_cmds[] = {
     "cd",
     "exit",
@@ -99,6 +102,77 @@ static char** shell_completion(const char* text, int start, int end) {
 void init_readline(void) {
     rl_attempted_completion_function = shell_completion;
     using_history();
+}
+
+void add_job(pid_t pid, const char* cmd) {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (!job_list[i].active) {
+            job_list[i].job_id = next_job_id++;
+            job_list[i].pid = pid;
+            job_list[i].cmd = strdup(cmd != NULL ? cmd : "");
+            job_list[i].active = 1;
+            printf("[%d] %d\n", job_list[i].job_id, (int)pid);
+            return;
+        }
+    }
+    fprintf(stderr, "Warning: maximum background jobs limit reached\n");
+}
+
+void reap_background_jobs(void) {
+    int status;
+    pid_t pid;
+
+    // Non-blocking reap of all terminated child processes to prevent zombies
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        for (int i = 0; i < MAX_JOBS; i++) {
+            if (job_list[i].active && job_list[i].pid == pid) {
+                printf("\n[%d] Done\t%s\n", job_list[i].job_id, job_list[i].cmd);
+                free(job_list[i].cmd);
+                job_list[i].cmd = NULL;
+                job_list[i].active = 0;
+                break;
+            }
+        }
+    }
+
+    // Reset job ID counter when no active jobs remain
+    int any_active = 0;
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (job_list[i].active) {
+            any_active = 1;
+            break;
+        }
+    }
+    if (!any_active) {
+        next_job_id = 1;
+    }
+}
+
+void print_jobs(void) {
+    reap_background_jobs();
+
+    int found = 0;
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (job_list[i].active) {
+            printf("[%d] Running\tPID: %d\t%s &\n",
+                   job_list[i].job_id, (int)job_list[i].pid, job_list[i].cmd);
+            found = 1;
+        }
+    }
+
+    if (!found) {
+        printf("No active background jobs.\n");
+    }
+}
+
+void free_jobs(void) {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (job_list[i].active) {
+            free(job_list[i].cmd);
+            job_list[i].cmd = NULL;
+            job_list[i].active = 0;
+        }
+    }
 }
 
 void add_to_history(const char* cmd) {
@@ -321,6 +395,7 @@ int handle_builtin(char** arglist) {
     }
 
     if (strcmp(arglist[0], "exit") == 0) {
+        free_jobs();
         free_history();
         printf("Shell exited.\n");
         exit(0);
@@ -346,14 +421,14 @@ int handle_builtin(char** arglist) {
         printf("  cd <directory>  Change the current working directory\n");
         printf("  history         Display the command history list\n");
         printf("  !n              Re-execute the n-th command from history\n");
-        printf("  help            Display this help message\n");
         printf("  jobs            List active background jobs\n");
+        printf("  help            Display this help message\n");
         printf("  exit            Exit the shell\n");
         return 1;
     }
 
     if (strcmp(arglist[0], "jobs") == 0) {
-        printf("Job control not yet implemented.\n");
+        print_jobs();
         return 1;
     }
 

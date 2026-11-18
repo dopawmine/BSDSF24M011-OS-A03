@@ -57,13 +57,14 @@ int execute(char* arglist[]) {
     }
 }
 
-int execute_pipeline(Command* cmds, int num_cmds) {
+int execute_pipeline(Command* cmds, int num_cmds, int background, const char* raw_cmd) {
     if (cmds == NULL || num_cmds <= 0) {
         return -1;
     }
 
-    // Run single unredirected built-in directly in the parent shell process
-    if (num_cmds == 1 &&
+    // Run single unredirected, non-background built-in directly in the parent shell
+    if (!background &&
+        num_cmds == 1 &&
         cmds[0].input_file == NULL &&
         cmds[0].output_file == NULL &&
         is_builtin_cmd(cmds[0].argv[0])) {
@@ -76,7 +77,6 @@ int execute_pipeline(Command* cmds, int num_cmds) {
         pid_t pids[MAX_CMDS];
 
         for (int i = 0; i < num_cmds; i++) {
-            // Create a pipe for every stage except the last
             if (i < num_cmds - 1) {
                 if (pipe(pipefd) < 0) {
                     perror("pipe");
@@ -108,7 +108,7 @@ int execute_pipeline(Command* cmds, int num_cmds) {
 
                 // Connect stdout to current pipe's write end
                 if (i < num_cmds - 1) {
-                    close(pipefd[0]); // Close unused read end in writer
+                    close(pipefd[0]);
                     if (dup2(pipefd[1], STDOUT_FILENO) < 0) {
                         perror("dup2 next pipe");
                         exit(1);
@@ -116,10 +116,9 @@ int execute_pipeline(Command* cmds, int num_cmds) {
                     close(pipefd[1]);
                 }
 
-                // Apply explicit '<' or '>' file redirections (overrides pipe ends if specified)
+                // Apply explicit '<' or '>' file redirections
                 apply_redirections(&cmds[i]);
 
-                // Allow built-ins (e.g., history | grep ls) to run inside a pipeline child
                 if (is_builtin_cmd(cmds[i].argv[0])) {
                     handle_builtin(cmds[i].argv);
                     exit(0);
@@ -130,22 +129,27 @@ int execute_pipeline(Command* cmds, int num_cmds) {
                 exit(1);
             }
 
-            // Parent process: record child PID and close used pipe descriptors
+            // Parent process
             pids[i] = pid;
 
             if (prev_read_fd != -1) {
                 close(prev_read_fd);
             }
             if (i < num_cmds - 1) {
-                close(pipefd[1]);        // Parent never writes to the pipe
-                prev_read_fd = pipefd[0]; // Save read end for the next stage
+                close(pipefd[1]);
+                prev_read_fd = pipefd[0];
             }
         }
 
-        // Wait for all children in the pipeline to finish
-        int status;
-        for (int i = 0; i < num_cmds; i++) {
-            waitpid(pids[i], &status, 0);
+        if (background) {
+            // Do not block: store the pipeline's last process PID in the background jobs list
+            add_job(pids[num_cmds - 1], raw_cmd);
+        } else {
+            // Foreground: wait for every child in the pipeline to finish
+            int status;
+            for (int i = 0; i < num_cmds; i++) {
+                waitpid(pids[i], &status, 0);
+            }
         }
 
         return 0;
