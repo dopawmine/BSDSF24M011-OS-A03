@@ -3,6 +3,107 @@
 static char* history[HISTORY_SIZE];
 static int history_count = 0;
 
+static const char* builtin_cmds[] = {
+    "cd",
+    "exit",
+    "help",
+    "history",
+    "jobs",
+    NULL
+};
+
+// Generator for built-in commands and executables in $PATH
+static char* command_generator(const char* text, int state) {
+    static int builtin_idx;
+    static size_t len;
+    static char* path_copy;
+    static char* current_dir;
+    static DIR* dir;
+
+    if (state == 0) {
+        builtin_idx = 0;
+        len = strlen(text);
+        if (dir != NULL) {
+            closedir(dir);
+            dir = NULL;
+        }
+        free(path_copy);
+        path_copy = NULL;
+        current_dir = NULL;
+
+        const char* path_env = getenv("PATH");
+        if (path_env != NULL) {
+            path_copy = strdup(path_env);
+            if (path_copy != NULL) {
+                current_dir = strtok(path_copy, ":");
+            }
+        }
+    }
+
+    // 1. Match built-in commands first
+    while (builtin_cmds[builtin_idx] != NULL) {
+        const char* name = builtin_cmds[builtin_idx++];
+        if (strncmp(name, text, len) == 0) {
+            return strdup(name);
+        }
+    }
+
+    // 2. Match executable files in $PATH directories
+    while (current_dir != NULL || dir != NULL) {
+        if (dir == NULL) {
+            dir = opendir(current_dir);
+            current_dir = strtok(NULL, ":");
+            if (dir == NULL) {
+                continue;
+            }
+        }
+
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (entry->d_name[0] == '.') {
+                continue;
+            }
+            if (strncmp(entry->d_name, text, len) == 0) {
+                return strdup(entry->d_name);
+            }
+        }
+
+        closedir(dir);
+        dir = NULL;
+    }
+
+    free(path_copy);
+    path_copy = NULL;
+    return NULL;
+}
+
+// Custom completion hook: command completion for first word, filename completion otherwise
+static char** shell_completion(const char* text, int start, int end) {
+    (void)end;
+
+    // Check if only whitespace precedes `start` (meaning we are completing the command name)
+    int is_command_pos = 1;
+    for (int i = 0; i < start; i++) {
+        if (rl_line_buffer[i] != ' ' && rl_line_buffer[i] != '\t') {
+            is_command_pos = 0;
+            break;
+        }
+    }
+
+    if (is_command_pos) {
+        // Also allow default filename completion if no command matches (e.g., ./script)
+        return rl_completion_matches(text, command_generator);
+    }
+
+    // Returning NULL lets Readline perform default filename completion
+    return NULL;
+}
+
+void init_readline(void) {
+    rl_attempted_completion_function = shell_completion;
+    using_history();
+}
+
 void add_to_history(const char* cmd) {
     if (cmd == NULL) {
         return;
@@ -54,27 +155,7 @@ void free_history(void) {
         history[i] = NULL;
     }
     history_count = 0;
-}
-
-char* read_cmd(char* prompt, FILE* fp) {
-    printf("%s", prompt);
-    char* cmdline = (char*) malloc(sizeof(char) * MAX_LEN);
-    int c, pos = 0;
-
-    while ((c = getc(fp)) != EOF) {
-        if (c == '\n') break;
-        if (pos < MAX_LEN - 1) {
-            cmdline[pos++] = c;
-        }
-    }
-
-    if (c == EOF && pos == 0) {
-        free(cmdline);
-        return NULL; // Handle Ctrl+D
-    }
-
-    cmdline[pos] = '\0';
-    return cmdline;
+    clear_history();
 }
 
 char** tokenize(char* cmdline) {

@@ -1,10 +1,23 @@
 #include "shell.h"
 
+static int is_blank(const char* str) {
+    if (str == NULL) return 1;
+    while (*str != '\0') {
+        if (*str != ' ' && *str != '\t' && *str != '\n') {
+            return 0;
+        }
+        str++;
+    }
+    return 1;
+}
+
 int main() {
     char* cmdline;
     char** arglist;
 
-    while ((cmdline = read_cmd(PROMPT, stdin)) != NULL) {
+    init_readline();
+
+    while ((cmdline = readline(PROMPT)) != NULL) {
         // Handle !n re-execution before adding to history or tokenizing
         if (cmdline[0] == '!') {
             char* endptr = NULL;
@@ -40,8 +53,11 @@ int main() {
                 cmdline = expanded;
         }
 
-        // Record non-empty command in history
-        add_to_history(cmdline);
+        // Record non-empty command in both Readline history (Up/Down arrows) and shell history
+        if (!is_blank(cmdline)) {
+            add_history(cmdline);
+            add_to_history(cmdline);
+        }
 
         if ((arglist = tokenize(cmdline)) != NULL) {
             if (!handle_builtin(arglist)) {
